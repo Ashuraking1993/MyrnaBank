@@ -1,0 +1,6 @@
+@KwentadorPH.Api_HostAddress = http://localhost:5070
+
+GET {{KwentadorPH.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
