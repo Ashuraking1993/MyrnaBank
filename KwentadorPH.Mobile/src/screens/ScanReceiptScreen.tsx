@@ -325,7 +325,7 @@ const stopVoiceRecording = async () => {
           <Text style={styles.analyzeText}>
             {isAnalyzing
               ? "Analyzing Receipt..."
-              : "✨ Analyze with Kwentador AI"}
+              : "✨ Analyzing"}
           </Text>
         </Pressable>
       )}

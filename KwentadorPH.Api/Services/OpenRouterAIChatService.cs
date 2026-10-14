@@ -21,16 +21,16 @@ public class OpenRouterAIChatService
         string userMessage,
         string financialContext)
     {
-        var apiKey = _configuration["OpenRouter:ApiKey"];
+        var apiKey = _configuration["DeepSeek:ApiKey"];
 
         if (string.IsNullOrWhiteSpace(apiKey))
-            throw new Exception("OpenRouter API key is missing.");
+            throw new Exception("DeepSeek API key is missing.");
 
         var prompt = $$"""
-You are Myrna, the official AI financial assistant of Myrna Bank.
+You are Myrna, the official AI financial assistant of Money Mentor.
+
 Always identify yourself as Myrna.
 Never call yourself Kwentador PH-AI, Kwentador AI, or any other name.
-If the user greets you or asks who you are, introduce yourself as Myrna from Myrna Bank.
 
 The user asked:
 "{{userMessage}}"
@@ -60,46 +60,20 @@ Rules:
 - Keep the answer concise.
 - Return plain text only.
 - Answer the user's actual question first.
-- Only discuss financial goals when the user's question is about goals, saving targets, goal feasibility, or goal progress.
+- Only discuss financial goals when the user's question is about goals,
+  saving targets, goal feasibility, or goal progress.
 - Do not mention a goal just because goal data exists in the financial context.
 - If the user asks about expenses, answer using expense data.
 - If the user asks about income or cash flow, answer using income and cash-flow data.
 - If the user asks about account balances, answer using balance data.
-- If the user asks a general financial question, use only the relevant verified data from the context.
-- Never force the Japan Travel Fund into unrelated answers.
+- If the user asks a general financial question, use only the relevant
+  verified data from the context.
 """;
 
-       var models = new[]
-{
-    // Primary
-
-    "inclusionai/ling-3.0-flash-vl:free",
-    
-    "nvidia/nemotron-3.5-lightning:free",
-
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-
-    // Free fallback
-    
-
-    // Paid/reliable fallback
-    "~deepseek/deepseek-pro-latest",
-
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-
-    // Last-resort free router
-    "openrouter/free"
-};
-
-string? lastError = null;
-
-foreach (var model in models)
-{
-    try
-    {
         var body = new
         {
-            model = model,
+            model = "deepseek-flash",
+
             messages = new[]
             {
                 new
@@ -107,12 +81,19 @@ foreach (var model in models)
                     role = "user",
                     content = prompt
                 }
-            }
+            },
+
+            thinking = new
+            {
+                type = "disabled"
+            },
+
+            max_tokens = 800
         };
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "https://openrouter.ai/api/v1/chat/completions"
+            "https://api.deepseek.com/chat/completions"
         );
 
         request.Headers.Authorization =
@@ -127,21 +108,38 @@ foreach (var model in models)
             "application/json"
         );
 
-        var response =
-            await _httpClient.SendAsync(request);
+        using var cts = new CancellationTokenSource(
+            TimeSpan.FromSeconds(15)
+        );
+
+        HttpResponseMessage response;
+
+        try
+        {
+            response = await _httpClient.SendAsync(
+                request,
+                cts.Token
+            );
+        }
+        catch (OperationCanceledException)
+        {
+            throw new Exception(
+                "DeepSeek request timed out."
+            );
+        }
 
         var responseContent =
             await response.Content.ReadAsStringAsync();
 
         if (!response.IsSuccessStatusCode)
         {
-            lastError = responseContent;
-
             Console.WriteLine(
-                $"AI model failed [{model}]: {responseContent}"
+                $"DeepSeek Error: {responseContent}"
             );
 
-            continue;
+            throw new Exception(
+                $"DeepSeek API request failed: {response.StatusCode}"
+            );
         }
 
         using var document =
@@ -155,24 +153,13 @@ foreach (var model in models)
             choices.ValueKind != JsonValueKind.Array ||
             choices.GetArrayLength() == 0)
         {
-            lastError = responseContent;
-
-            Console.WriteLine(
-                $"AI model returned no choices [{model}]: {responseContent}"
+            throw new Exception(
+                "DeepSeek returned no AI choices."
             );
-
-            continue;
         }
 
-        var firstChoice = choices[0];
-
-        if (!firstChoice.TryGetProperty(
-                "message",
-                out var message))
-        {
-            lastError = responseContent;
-            continue;
-        }
+        var message =
+            choices[0].GetProperty("message");
 
         string? result = null;
 
@@ -184,38 +171,17 @@ foreach (var model in models)
             result = contentElement.GetString();
         }
 
-        if (string.IsNullOrWhiteSpace(result) &&
-            message.TryGetProperty(
-                "reasoning",
-                out var reasoningElement) &&
-            reasoningElement.ValueKind == JsonValueKind.String)
+        if (string.IsNullOrWhiteSpace(result))
         {
-            result = reasoningElement.GetString();
-        }
-
-        if (!string.IsNullOrWhiteSpace(result))
-        {
-            Console.WriteLine(
-                $"AI Chat successful using: {model}"
+            throw new Exception(
+                "DeepSeek returned an empty response."
             );
-
-            return result.Trim();
         }
-
-        lastError = responseContent;
-    }
-    catch (Exception ex)
-    {
-        lastError = ex.Message;
 
         Console.WriteLine(
-            $"AI model exception [{model}]: {ex.Message}"
+            "AI Chat successful using DeepSeek."
         );
-    }
-}
 
-throw new Exception(
-    $"All AI models failed. Last error: {lastError}"
-);
+        return result.Trim();
     }
 }

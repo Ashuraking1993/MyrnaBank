@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import * as Speech from "expo-speech";
 
 export default function AIChatScreen() {
   const [message, setMessage] = useState("");
@@ -60,7 +61,17 @@ const handleSend = async () => {
           : undefined,
     };
 
-    setMessages((prev) => [...prev, aiMessage]);
+   setMessages((prev) => [...prev, aiMessage]);
+
+   // 🔊 Myrna reads her AI response
+   await Speech.stop();
+
+   Speech.speak(aiMessage.text, {
+     language: "en-US",
+     rate: 0.95,
+     pitch: 1.05,
+   });
+
   } catch (error) {
     console.error("AI Chat Error:", error);
 

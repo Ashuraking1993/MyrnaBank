@@ -1,6 +1,8 @@
-import { NavigationContainer } from "@react-navigation/native";
+import {
+  NavigationContainer,
+  createNavigationContainerRef,
+} from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-
 import LoginScreen from "../screens/LoginScreen";
 import DashboardScreen from "../screens/DashboardScreen";
 import ExpensesScreen from "../screens/ExpensesScreen";
@@ -58,14 +60,18 @@ export type RootStackParamList = {
         }
       | undefined;
     QRScanner: undefined;
+    Insights: undefined;
 
 };
+
+export const navigationRef =
+  createNavigationContainerRef<RootStackParamList>();
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function AppNavigator() {
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <Stack.Navigator
         initialRouteName="Login"
         screenOptions={{ headerShown: false }}
@@ -194,13 +200,13 @@ export default function AppNavigator() {
           options={{ headerShown: false }}
         />
 
-        <Stack.Screen
-          name="AddAccount"
-          component={AddAccountScreen}
-          options={{ headerShown: false }}
-        />
+      <Stack.Screen
+              name="AddAccount"
+              component={AddAccountScreen}
+              options={{ headerShown: false }}
+     />
 
       </Stack.Navigator>
-    </NavigationContainer>
+      </NavigationContainer>
   );
 }

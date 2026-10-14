@@ -2,6 +2,8 @@ import * as FileSystem from "expo-file-system/legacy";
 
 const API_URL = "http://192.168.0.219:5070/api";
 
+// const API_URL = "http://192.168.0.112:5070/api";
+
 export async function getTransactions() {
   const response = await fetch(`${API_URL}/Transactions`);
 

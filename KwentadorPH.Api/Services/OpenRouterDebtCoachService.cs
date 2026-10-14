@@ -24,10 +24,10 @@ public class OpenRouterDebtCoachService
         decimal extraMonthlyPayment,
         decimal interestSaved)
     {
-        var apiKey = _configuration["OpenRouter:ApiKey"];
+        var apiKey = _configuration["DeepSeek:ApiKey"];
 
         if (string.IsNullOrWhiteSpace(apiKey))
-            throw new Exception("OpenRouter API key is missing.");
+            throw new Exception("DeepSeek API key is missing.");
 
         var debtList = string.Join(
             "\n",
@@ -43,9 +43,10 @@ public class OpenRouterDebtCoachService
         );
 
         var prompt = $$"""
-You are Kwentador PH-AI Debt Coach, a friendly Filipino personal finance coach.
+You are Myrna, the AI Debt Coach of Money Mentor.
 
-The system has already calculated the user's debt payoff plan using a deterministic financial engine.
+The system has already calculated the user's debt payoff plan
+using a deterministic financial engine.
 
 DEBT PROFILE:
 {{debtList}}
@@ -77,32 +78,9 @@ Rules:
 - Return plain text only.
 """;
 
-      var models = new[]
-{
-    "inclusionai/ling-3.0-flash-vl:free",
-
-    "nvidia/nemotron-3.5-lightning:free",
-
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-
-    // Paid/reliable fallback
-    "~deepseek/deepseek-pro-latest",
-
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-
-    // Last-resort OpenRouter free router
-    "openrouter/free"
-};
-
-string? lastError = null;
-
-foreach (var model in models)
-{
-    try
-    {
         var body = new
         {
-            model = model,
+            model = "deepseek-flash",
 
             messages = new[]
             {
@@ -111,12 +89,21 @@ foreach (var model in models)
                     role = "user",
                     content = prompt
                 }
-            }
+            },
+
+            // We only need a short explanation.
+            // No extended reasoning is required.
+            thinking = new
+            {
+                type = "disabled"
+            },
+
+            max_tokens = 300
         };
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "https://openrouter.ai/api/v1/chat/completions"
+            "https://api.deepseek.com/chat/completions"
         );
 
         request.Headers.Authorization =
@@ -131,132 +118,98 @@ foreach (var model in models)
             "application/json"
         );
 
-        var response =
-            await _httpClient.SendAsync(request);
-
-        var responseContent =
-            await response.Content.ReadAsStringAsync();
-
-        // ==========================================
-        // MODEL FAILED
-        // ==========================================
-
-        if (!response.IsSuccessStatusCode)
-        {
-            lastError = responseContent;
-
-            Console.WriteLine(
-                $"Debt Coach model failed [{model}]: " +
-                responseContent
+        // Prevent AI from making the Debt Planner wait too long.
+        using var cts =
+            new CancellationTokenSource(
+                TimeSpan.FromSeconds(10)
             );
 
-            continue;
-        }
-
-        using var document =
-            JsonDocument.Parse(responseContent);
-
-        var root =
-            document.RootElement;
-
-        // ==========================================
-        // CHECK CHOICES
-        // ==========================================
-
-        if (!root.TryGetProperty(
-                "choices",
-                out var choices) ||
-            choices.ValueKind != JsonValueKind.Array ||
-            choices.GetArrayLength() == 0)
+        try
         {
-            lastError = responseContent;
+            var response =
+                await _httpClient.SendAsync(
+                    request,
+                    cts.Token
+                );
+
+            var responseContent =
+                await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine(
+                    $"DeepSeek Debt Coach Error: {responseContent}"
+                );
+
+                throw new Exception(
+                    $"DeepSeek Debt Coach request failed: " +
+                    $"{response.StatusCode}"
+                );
+            }
+
+            using var document =
+                JsonDocument.Parse(responseContent);
+
+            var root =
+                document.RootElement;
+
+            if (!root.TryGetProperty(
+                    "choices",
+                    out var choices) ||
+                choices.ValueKind != JsonValueKind.Array ||
+                choices.GetArrayLength() == 0)
+            {
+                throw new Exception(
+                    "DeepSeek Debt Coach returned no choices."
+                );
+            }
+
+            var firstChoice =
+                choices[0];
+
+            if (!firstChoice.TryGetProperty(
+                    "message",
+                    out var message))
+            {
+                throw new Exception(
+                    "DeepSeek Debt Coach returned no message."
+                );
+            }
+
+            string? result = null;
+
+            if (message.TryGetProperty(
+                    "content",
+                    out var contentElement) &&
+                contentElement.ValueKind ==
+                    JsonValueKind.String)
+            {
+                result =
+                    contentElement.GetString();
+            }
+
+            if (string.IsNullOrWhiteSpace(result))
+            {
+                throw new Exception(
+                    "DeepSeek Debt Coach returned an empty response."
+                );
+            }
 
             Console.WriteLine(
-                $"Debt Coach returned no choices [{model}]: " +
-                responseContent
-            );
-
-            continue;
-        }
-
-        var firstChoice =
-            choices[0];
-
-        if (!firstChoice.TryGetProperty(
-                "message",
-                out var message))
-        {
-            lastError = responseContent;
-
-            Console.WriteLine(
-                $"Debt Coach returned no message [{model}]"
-            );
-
-            continue;
-        }
-
-        string? result = null;
-
-        // ==========================================
-        // NORMAL CONTENT
-        // ==========================================
-
-        if (message.TryGetProperty(
-                "content",
-                out var contentElement) &&
-            contentElement.ValueKind ==
-                JsonValueKind.String)
-        {
-            result =
-                contentElement.GetString();
-        }
-
-        // ==========================================
-        // REASONING FALLBACK
-        // ==========================================
-
-        if (string.IsNullOrWhiteSpace(result) &&
-            message.TryGetProperty(
-                "reasoning",
-                out var reasoningElement) &&
-            reasoningElement.ValueKind ==
-                JsonValueKind.String)
-        {
-            result =
-                reasoningElement.GetString();
-        }
-
-        // ==========================================
-        // SUCCESS
-        // ==========================================
-
-        if (!string.IsNullOrWhiteSpace(result))
-        {
-            Console.WriteLine(
-                $"Debt Coach successful using: {model}"
+                "Debt Coach successful using DeepSeek."
             );
 
             return result.Trim();
         }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine(
+                "DeepSeek Debt Coach timed out."
+            );
 
-        lastError = responseContent;
-    }
-    catch (Exception ex)
-    {
-        lastError = ex.Message;
-
-        Console.WriteLine(
-            $"Debt Coach model exception [{model}]: " +
-            ex.Message
-        );
-    }
-    }
-
-    throw new Exception(
-        $"All Debt Coach AI models failed. " +
-        $"Last error: {lastError}"
-    );      
-
-       
+            throw new Exception(
+                "DeepSeek Debt Coach request timed out."
+            );
+        }
     }
 }

@@ -16,7 +16,7 @@ import {
   getTransactions,
   getFinancialHealth,
 } from "../services/api";
-
+import MyrnaVoiceButton from "../components/MyrnaVoiceButton";
 export default function DashboardScreen() {
   const navigation = useNavigation<any>();
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
@@ -591,6 +591,11 @@ useEffect(() => {
             </View>
 
     </ScrollView>
+
+
+
+    <MyrnaVoiceButton navigation={navigation} />
+
      {/* FIXED BOTTOM NAV */}
         <View style={styles.bottomNav}>
           <Pressable style={styles.navItem}>

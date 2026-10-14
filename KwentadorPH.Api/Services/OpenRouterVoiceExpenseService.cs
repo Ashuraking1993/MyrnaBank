@@ -20,15 +20,18 @@ public class OpenRouterVoiceExpenseService
     public async Task<string> ParseExpenseAsync(
         string transcript)
     {
-        var apiKey = _configuration["OpenRouter:ApiKey"];
+        var apiKey = _configuration["DeepSeek:ApiKey"];
 
         if (string.IsNullOrWhiteSpace(apiKey))
-            throw new Exception("OpenRouter API key is missing.");
+            throw new Exception("DeepSeek API key is missing.");
+
+        if (string.IsNullOrWhiteSpace(transcript))
+            throw new Exception("Voice transcript is empty.");
 
         var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
 
         var prompt = $$"""
-You are Kwentador PH-AI.
+You are Myrna, the AI financial assistant of Money Mentor.
 
 The following text came from speech recognition and may contain
 incorrect spelling, especially Filipino or Taglish words.
@@ -43,7 +46,7 @@ Example:
 means:
 "Gulay sa palengke 500 pesos"
 
-Return ONLY valid JSON:
+Return ONLY valid JSON using this exact structure:
 
 {
   "description": "string",
@@ -81,13 +84,16 @@ Rules:
 - If uncertain about category, use Others.
 - Do NOT invent an amount.
 - transactionDate must be {{today}}.
-- confidence must be between 0 and 1.
+- confidence must be a numeric value between 0 and 1.
+- Do not include markdown.
+- Do not include explanations.
 - Return JSON only.
 """;
 
         var body = new
         {
-            model = "openrouter/free",
+            model = "deepseek-flash",
+
             messages = new[]
             {
                 new
@@ -95,12 +101,24 @@ Rules:
                     role = "user",
                     content = prompt
                 }
-            }
+            },
+
+            response_format = new
+            {
+                type = "json_object"
+            },
+
+            thinking = new
+            {
+                type = "disabled"
+            },
+
+            max_tokens = 300
         };
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "https://openrouter.ai/api/v1/chat/completions"
+            "https://api.deepseek.com/chat/completions"
         );
 
         request.Headers.Authorization =
@@ -115,56 +133,132 @@ Rules:
             "application/json"
         );
 
-        var response =
-            await _httpClient.SendAsync(request);
-
-        var responseContent =
-            await response.Content.ReadAsStringAsync();
-
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new Exception(
-                $"OpenRouter error: {responseContent}"
+        using var cts =
+            new CancellationTokenSource(
+                TimeSpan.FromSeconds(10)
             );
-        }
 
-        using var document =
-            JsonDocument.Parse(responseContent);
-
-        var result = document.RootElement
-            .GetProperty("choices")[0]
-            .GetProperty("message")
-            .GetProperty("content")
-            .GetString();
-
-        if (string.IsNullOrWhiteSpace(result))
-            throw new Exception("AI returned empty content.");
-
-        var cleanResult = result
-            .Replace("```json", "")
-            .Replace("```", "")
-            .Trim();
-
-        // Find actual JSON object in case the model
-        // adds extra text before or after it
-        var jsonStart = cleanResult.IndexOf('{');
-        var jsonEnd = cleanResult.LastIndexOf('}');
-
-        if (jsonStart == -1 || jsonEnd == -1 || jsonEnd <= jsonStart)
+        try
         {
-            throw new Exception(
-                $"AI returned invalid expense JSON: {cleanResult}"
-            );
-        }
+            var response =
+                await _httpClient.SendAsync(
+                    request,
+                    cts.Token
+                );
 
-        var json = cleanResult.Substring(
-            jsonStart,
-            jsonEnd - jsonStart + 1
-        );
+            var responseContent =
+                await response.Content.ReadAsStringAsync();
 
-        // Validate JSON before returning to mobile
-        using var validatedJson = JsonDocument.Parse(json);
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine(
+                    $"DeepSeek Voice Expense Error: {responseContent}"
+                );
 
-        return json;
+                throw new Exception(
+                    $"DeepSeek Voice Expense request failed: " +
+                    $"{response.StatusCode}"
+                );
             }
+
+            using var document =
+                JsonDocument.Parse(responseContent);
+
+            var root = document.RootElement;
+
+            if (!root.TryGetProperty(
+                    "choices",
+                    out var choices) ||
+                choices.ValueKind != JsonValueKind.Array ||
+                choices.GetArrayLength() == 0)
+            {
+                throw new Exception(
+                    "DeepSeek returned no Voice Expense choices."
+                );
+            }
+
+            var firstChoice = choices[0];
+
+            if (!firstChoice.TryGetProperty(
+                    "message",
+                    out var message))
+            {
+                throw new Exception(
+                    "DeepSeek returned no Voice Expense message."
+                );
+            }
+
+            if (!message.TryGetProperty(
+                    "content",
+                    out var contentElement) ||
+                contentElement.ValueKind != JsonValueKind.String)
+            {
+                throw new Exception(
+                    "DeepSeek returned no Voice Expense content."
+                );
+            }
+
+            var result = contentElement.GetString();
+
+            if (string.IsNullOrWhiteSpace(result))
+            {
+                throw new Exception(
+                    "DeepSeek returned empty Voice Expense content."
+                );
+            }
+
+            // ==========================================
+            // CLEAN RESPONSE
+            // ==========================================
+
+            var cleanResult = result
+                .Replace("```json", "")
+                .Replace("```", "")
+                .Trim();
+
+            var jsonStart =
+                cleanResult.IndexOf('{');
+
+            var jsonEnd =
+                cleanResult.LastIndexOf('}');
+
+            if (jsonStart == -1 ||
+                jsonEnd == -1 ||
+                jsonEnd <= jsonStart)
+            {
+                throw new Exception(
+                    $"DeepSeek returned invalid expense JSON: " +
+                    $"{cleanResult}"
+                );
+            }
+
+            var json = cleanResult.Substring(
+                jsonStart,
+                jsonEnd - jsonStart + 1
+            );
+
+            // ==========================================
+            // VALIDATE JSON
+            // ==========================================
+
+            using var validatedJson =
+                JsonDocument.Parse(json);
+
+            Console.WriteLine(
+                "Voice Expense successfully parsed using DeepSeek."
+            );
+
+            return json;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine(
+                "DeepSeek Voice Expense timed out."
+            );
+
+            throw new Exception(
+                "DeepSeek Voice Expense request timed out."
+            );
+        }
+    }
 }

@@ -24,21 +24,21 @@ public class OpenRouterInsightsService
         string topCategory,
         decimal topCategoryAmount)
     {
-        var apiKey = _configuration["OpenRouter:ApiKey"];
+        var apiKey = _configuration["DeepSeek:ApiKey"];
 
         if (string.IsNullOrWhiteSpace(apiKey))
-            throw new Exception("OpenRouter API key is missing.");
+            throw new Exception("DeepSeek API key is missing.");
 
         var prompt = $$"""
-You are Kwentador PH-AI, a friendly Filipino personal financial coach.
+You are Myrna, the AI financial coach of Money Mentor.
 
-Analyze this user's monthly financial summary:
+Analyze this user's VERIFIED monthly financial summary:
 
-Monthly Income: PHP {{monthlyIncome}}
-Monthly Expenses: PHP {{monthlyExpenses}}
-Net Cash Flow: PHP {{netCashFlow}}
+Monthly Income: PHP {{monthlyIncome:N2}}
+Monthly Expenses: PHP {{monthlyExpenses:N2}}
+Net Cash Flow: PHP {{netCashFlow:N2}}
 Highest Spending Category: {{topCategory}}
-Highest Category Spending: PHP {{topCategoryAmount}}
+Highest Category Spending: PHP {{topCategoryAmount:N2}}
 
 Give ONE short, practical and personalized financial insight.
 
@@ -46,18 +46,22 @@ Rules:
 - Use clear and simple English.
 - Keep the tone professional, friendly, and encouraging.
 - Avoid Tagalog or Taglish.
-- Maximum 2 sentences.
+- Maximum 2 short sentences.
 - Be encouraging but realistic.
-- Mention actual numbers when useful.
-- Do not invent financial data.
-- Do not recommend loans, investments, or financial products.
-- Focus on spending habits and saving opportunities.
+- Mention actual provided numbers when useful.
+- Do NOT perform new financial calculations.
+- Do NOT change any provided numbers.
+- Do NOT invent financial data.
+- Treat all provided financial data as authoritative.
+- Do NOT recommend loans, investments, credit cards, or financial products.
+- Focus on spending habits, cash flow, and saving opportunities.
 - Return plain text only.
 """;
 
         var body = new
         {
-            model = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+            model = "deepseek-flash",
+
             messages = new[]
             {
                 new
@@ -65,12 +69,20 @@ Rules:
                     role = "user",
                     content = prompt
                 }
-            }
+            },
+
+            // Fast response is more important for a short insight.
+            thinking = new
+            {
+                type = "disabled"
+            },
+
+            max_tokens = 200
         };
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "https://openrouter.ai/api/v1/chat/completions"
+            "https://api.deepseek.com/chat/completions"
         );
 
         request.Headers.Authorization =
@@ -84,79 +96,107 @@ Rules:
             Encoding.UTF8,
             "application/json"
         );
-        
-        var response =
-         await _httpClient.SendAsync(request);
 
-        var responseContent =
-            await response.Content.ReadAsStringAsync();
-
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new Exception(
-                $"OpenRouter error: {responseContent}"
+        // Prevent AI Insights from hanging the UI.
+        using var cts =
+            new CancellationTokenSource(
+                TimeSpan.FromSeconds(10)
             );
+
+        try
+        {
+            var response =
+                await _httpClient.SendAsync(
+                    request,
+                    cts.Token
+                );
+
+            var responseContent =
+                await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine(
+                    $"DeepSeek Insights Error: {responseContent}"
+                );
+
+                throw new Exception(
+                    $"DeepSeek Insights request failed: " +
+                    $"{response.StatusCode}"
+                );
+            }
+
+            using var document =
+                JsonDocument.Parse(responseContent);
+
+            var root =
+                document.RootElement;
+
+            if (!root.TryGetProperty(
+                    "choices",
+                    out var choices) ||
+                choices.ValueKind != JsonValueKind.Array ||
+                choices.GetArrayLength() == 0)
+            {
+                Console.WriteLine(
+                    $"DeepSeek returned no choices: {responseContent}"
+                );
+
+                throw new Exception(
+                    "DeepSeek returned no AI choices."
+                );
+            }
+
+            var firstChoice =
+                choices[0];
+
+            if (!firstChoice.TryGetProperty(
+                    "message",
+                    out var message))
+            {
+                throw new Exception(
+                    "DeepSeek returned no AI message."
+                );
+            }
+
+            string? result = null;
+
+            if (message.TryGetProperty(
+                    "content",
+                    out var contentElement) &&
+                contentElement.ValueKind ==
+                    JsonValueKind.String)
+            {
+                result =
+                    contentElement.GetString();
+            }
+
+            if (string.IsNullOrWhiteSpace(result))
+            {
+                Console.WriteLine(
+                    $"DeepSeek returned empty output: {responseContent}"
+                );
+
+                throw new Exception(
+                    "DeepSeek returned no usable insight."
+                );
+            }
+
+            Console.WriteLine(
+                "AI Insight successful using DeepSeek."
+            );
+
+            return result.Trim();
         }
-
-
-       using var document = JsonDocument.Parse(responseContent);
-
-        var root = document.RootElement;
-
-        if (!root.TryGetProperty("choices", out var choices) ||
-            choices.ValueKind != JsonValueKind.Array ||
-            choices.GetArrayLength() == 0)
+        catch (OperationCanceledException)
         {
             Console.WriteLine(
-                $"OpenRouter returned no choices: {responseContent}"
+                "DeepSeek AI Insights timed out."
             );
 
             throw new Exception(
-                "OpenRouter returned no AI choices."
+                "DeepSeek AI Insights request timed out."
             );
         }
-
-        var firstChoice = choices[0];
-
-        if (!firstChoice.TryGetProperty("message", out var message))
-        {
-            Console.WriteLine(
-                $"OpenRouter returned no message: {responseContent}"
-            );
-
-            throw new Exception(
-                "OpenRouter returned no AI message."
-            );
-        }
-
-        string? result = null;
-
-        if (message.TryGetProperty("content", out var contentElement) &&
-            contentElement.ValueKind == JsonValueKind.String)
-        {
-            result = contentElement.GetString();
-        }
-
-        if (string.IsNullOrWhiteSpace(result) &&
-            message.TryGetProperty("reasoning", out var reasoningElement) &&
-            reasoningElement.ValueKind == JsonValueKind.String)
-        {
-            result = reasoningElement.GetString();
-        }
-
-        if (string.IsNullOrWhiteSpace(result))
-        {
-            Console.WriteLine(
-                $"OpenRouter returned empty AI output: {responseContent}"
-            );
-
-            throw new Exception(
-                "AI returned no usable insight."
-            );
-        }
-
-        return result.Trim();
-
-   
     }
 }

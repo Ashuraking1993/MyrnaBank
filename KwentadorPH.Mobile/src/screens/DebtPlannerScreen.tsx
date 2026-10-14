@@ -31,26 +31,34 @@ export default function DebtPlannerScreen() {
   const [loading, setLoading] = useState(true);
 
 const loadDebtPlanner = useCallback(async () => {
+  // 1. Load deterministic debt data FIRST
   try {
     setLoading(true);
 
-    const [
-      debtData,
-      recommendationData,
-      aiCoachData,
-    ] = await Promise.all([
+    const [debtData, recommendationData] = await Promise.all([
       getDebtAccounts(),
       getDebtRecommendation(3000),
-      getDebtAICoach(3000),
     ]);
 
-    setDebts(debtData);
+    setDebts(Array.isArray(debtData) ? debtData : []);
     setRecommendation(recommendationData);
+  } catch (error) {
+    console.log("Debt Planner Data Error:", error);
+  } finally {
+    // Core Debt Planner is ready.
+
+    setLoading(false);
+  }
+
+  // 2. Load Myrna AI separately in the background
+  try {
+    const aiCoachData = await getDebtAICoach(3000);
     setAiCoach(aiCoachData);
   } catch (error) {
-    console.log("Debt Planner Error:", error);
-  } finally {
-    setLoading(false);
+    console.log("Myrna Debt Coach unavailable:", error);
+
+    // AI failure must never block the Debt Planner.
+    setAiCoach(null);
   }
 }, []);
 
